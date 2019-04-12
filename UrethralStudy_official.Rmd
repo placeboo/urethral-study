@@ -1,0 +1,617 @@
+---
+title: "Data Analysis --- A Case Study of Urethral Stricture Management in Senegal"
+author: "Maahum Haider, Jiaqi Yin (consultant)"
+date: "May 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls()) # clean all the data
+```
+## Library
+First, we need to have some libraries whose functions are used in our analysis. If you do not have such library, just use install.packages() to install packages first.
+```{r, warning=FALSE}
+library(readxl) # read excel file
+library(dplyr)
+library(pander)
+library(xtable)
+library(ggplot2)
+library(lubridate)
+library(knitr)
+```
+# Data Exploration
+
+Load data
+```{r, warning=FALSE}
+dat_org <- read_excel("surg log by procedure data.xlsx")
+```
+See the dimension of the data. Check the number of patients
+```{r}
+dim(dat_org)
+length(unique(dat_org$Patient_id))
+range(dat_org$`DATE of surgery`)
+```
+There are 145 surgeries over the 11 years, and 116 patients.
+Change the variable type
+```{r}
+dat1 = dat_org
+# change character to factor
+dat1$location_1 = as.factor(dat1$location_1)
+```
+
+## Characteristics
+All changes in outcomes are compared before and after 08/13/2013. We build a new variable called **b4_1workshop** indicates whether the surgeries were done before 08/12/2013 or not (1: before/including the date, 0: after the date).
+```{r}
+dat1$`DATE of surgery` = as.Date(dat_org$`DATE of surgery`)
+b4_1workshop = rep(0, nrow(dat1))
+b4_1workshop = ifelse(dat1$`DATE of surgery` <=  as.Date('8/12/13', "%m/%d/%y"), 1, 0)
+dat1$b4_1workshop = b4_1workshop
+
+# change the proprotion of before and after
+before_yrs = as.numeric(as.Date('8/12/13', "%m/%d/%y") - min(dat1$`DATE of surgery`)) /365.242 
+
+after_yrs = as.numeric(max(dat1$`DATE of surgery`) - as.Date('8/12/13', "%m/%d/%y")) / 365.242
+
+before_yrs
+```
+Demogrpahics includes age, region, and documented comorbidities. We use bivariate table with respect to before/after 08/13/2013. For patients who have multiple sugeries, we use their first record.
+First, show the patient who has multiple surgeries during the 11 years.
+```{r}
+mul_surgy_id = unique(dat1$Patient_id[duplicated(dat1$Patient_id)])
+print(mul_surgy_id)
+```
+For each patient, list the number of surgeries he/she has, and also show how many among them are before and after 8/12/13.
+```{r}
+mul_surgy_tab = matrix(0, ncol = 4, nrow = length(mul_surgy_id))
+colnames(mul_surgy_tab) = c("Patient_id", "n_surgery", "before", "after")
+for(i in 1: length(mul_surgy_id)){
+      id_i = mul_surgy_id[i]
+      
+      tmp_patient = filter(dat1, Patient_id == id_i)
+      mul_surgy_tab[i,] = c(id_i, nrow(tmp_patient), sum(tmp_patient$b4_1workshop), sum(1-tmp_patient$b4_1workshop))
+}
+print(mul_surgy_tab)
+table(mul_surgy_tab[,2]) %>% pander
+```
+23 out of 116 (20%) patients have multiple surgeries. We assume each surgery is independent, even though the patient may have multiple surgeries. We remove the surgeriew whose results are unknown.
+```{r}
+# for patients who have multiple surgeries, choose the first surgery
+mul2first_surgery_mat = matrix(0, nrow = length(mul_surgy_id), ncol = ncol(dat1))
+colnames(mul2first_surgery_mat) = colnames(dat1)
+for(i in 1: length(mul_surgy_id)){
+      id_i = mul_surgy_id[i]
+
+      tmp_patient = filter(dat1, Patient_id == id_i)
+      mul2first_surgery_mat[i,] = as.matrix(tmp_patient[which.min(tmp_patient$`DATE of surgery`),])
+}
+
+# change dat1's multiple to single surgery
+## remove
+dat1_unique = dat1[-which(dat1$Patient_id %in% mul_surgy_id),]
+## add
+dat1_unique = rbind(dat1_unique, mul2first_surgery_mat)
+```
+Change the age to categorical variables.
+```{r}
+dat1_unique$AGE = as.numeric(dat1_unique$AGE)
+age_cate = rep(NA, nrow(dat1_unique))
+age_cate[which(dat1_unique$AGE < 20)] = "<20"
+age_cate[which(dat1_unique$AGE >= 20 & dat1_unique$AGE <= 39)] = "20~39"
+age_cate[which(dat1_unique$AGE >= 40 & dat1_unique$AGE <= 59)] = "40~59"
+age_cate[which(dat1_unique$AGE >= 60 & dat1_unique$AGE <= 79)] = "60~79"
+age_cate[which(dat1_unique$AGE >= 80)] = ">=80"
+
+age_cate = factor(age_cate, levels = c("<20", "20~39", "40~59", "60~79", ">=80"))
+dat1_unique$age_cate = age_cate
+
+# change the region into binary category
+Is_dakar = ifelse(dat1_unique$REGION == "1", "Danker", "Other")
+dat1_unique$Is_dakar = Is_dakar
+
+dat1_unique %>% count(age_cate)
+## age
+age_descrip = dat1_unique %>% 
+      group_by(b4_1workshop, age_cate) %>%
+      summarise(n = n()) %>% mutate(prop = n / sum(n)) %>% 
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+age_all = dat1_unique %>% count(age_cate) %>%
+      mutate(prop = prop.table(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+age_descrip = cbind(as.character(age_descrip$age_cate[1:5]), age_descrip$n_prop[1:5], age_descrip$n_prop[6:10], age_all$n_prop)
+pander(age_descrip)
+## region
+region_descrip = dat1_unique %>% 
+      group_by(b4_1workshop, Is_dakar) %>%
+      summarise(n = n()) %>% mutate(prop = n / sum(n)) %>% 
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+region_all = dat1_unique %>% count(Is_dakar) %>%
+      mutate(prop = prop.table(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+region_descrip = cbind(region_descrip$Is_dakar[1:2], region_descrip$n_prop[1:2], region_descrip$n_prop[3:4], region_all$n_prop)
+pander(region_descrip)
+## Comorbidities
+dat1_unique$Comorbidity_1 = factor(dat1_unique$Comorbidity_1, levels = c(0:10))
+comor_descrip =  dat1_unique %>% 
+      group_by(b4_1workshop, Comorbidity_1) %>%
+      summarise(n = n()) %>% mutate(prop = n / sum(n)) %>% 
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+comor_all = dat1_unique %>% count(Comorbidity_1) %>%
+      mutate(prop = prop.table(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      as.data.frame()
+
+#comor_descrip = cbind(comor_descrip$Comorbidity_1[1:10], comor_descrip$n_prop[1:9], comor_descrip$n_prop[10:18], comor_all$n_prop)
+
+pander(comor_descrip)
+## combine
+tab1 = rbind(as.matrix(age_descrip[,c(1,4)]), as.matrix(region_descrip[, c(1,4)]), as.matrix(comor_all[, c(1,4)]))
+pander(tab1)
+```
+
+```{r, echo=F,eval=F}
+print(xtable(tab1, caption = "Patient Characteristics (N=116)"), include.rownames = F)
+```
+### Outcome Distribution
+Post-operative success was defined as a minimum of 6 months of follow-up over which there was no need for further intervention and the patient reported satisfaction with his urinary symptoms. Failure was defined as any further need for post-operative intervention within 2 years of urethroplasty or patient report of difficulty urinating. 
+```{r}
+dat1_bf = filter(dat1, b4_1workshop == "1")
+dat1_af = filter(dat1, b4_1workshop == "0")
+
+dat1_bf %>% count(`Post-op outcome`) %>% 
+      mutate(prop = prop.table(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(`Post-op outcome`, n_prop) %>%
+      pander
+
+dat1_af %>% count(`Post-op outcome`) %>%
+      mutate(prop = prop.table(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(`Post-op outcome`, n_prop) %>%
+      pander
+```
+Plot the proportion of success, failure, and unknown for each year.
+```{r}
+year_prop_out.df = dat1 %>% group_by(year = YEAR, `Post-op outcome`) %>% 
+      summarise(n = n()) %>%
+      mutate(prop = n / sum(n)) %>%
+      as.data.frame()
+
+year_prop_out.df$`Post-op outcome` =  as.factor(year_prop_out.df$`Post-op outcome`)
+
+p1 = year_prop_out.df %>% 
+      ggplot(aes(year, prop, group = `Post-op outcome`, color = `Post-op outcome`)) +
+      geom_point(size=5) +
+      geom_line(size=1.5)  +
+      scale_x_continuous(breaks=c(2006:2017)) + 
+      geom_vline(aes(xintercept=2013.66),size=1) + 
+      scale_colour_discrete(breaks=c("0", "1", "2"),
+                            labels=c("Failure", "Success", "TBD")) + 
+      ylab("Proportion") + xlab("Year") + 
+      theme_bw()
+p1
+ggsave(filename = "figure/post_outcome.png", height = 5, width = 8)
+```
+
+### Urethroplasty Techniques
+Plot about techniques use before/after IUVmed
+```{r}
+as.Date("8/12/13")
+# remove one without miss 
+tech = dat1$Surg_tech_1
+tech[tech %in% c('2', '3', '4', '10', '11', '14', '15')] = 'flap/graft'
+tech[tech == "0"] = "Exploration only"
+tech[tech == "1"] = "EPA"
+tech[tech == "5"] = "Fistula repair"
+tech[tech == "6"] = "Meatoplasty"
+tech[tech == "7"] = "Unspecified"
+tech[tech == "8"] = "Urethral sling"
+tech[tech == "9"] = "Perineal urethroplasty"
+tech[tech == "12"] = "Duplay urethroplasty"
+tech[tech == "13"] = "Urethrotomy and closure"
+
+tech = factor(tech, levels = c("Exploration only", "EPA", 'flap/graft', "Meatoplasty", "Perineal urethroplasty", "Urethrotomy and closure", "Fistula repair", "Duplay urethroplasty", "Urethral sling", "Unspecified"))
+
+
+dat1$tech = tech
+tech.df = dat1 %>% group_by(b4_1workshop, tech) %>%
+      count() %>% as.data.frame()
+
+tech.df = tech.df[-8,]
+n_per_year = rep(0, nrow(tech.df))
+n_per_year[tech.df$b4_1workshop == 0] = tech.df$n[tech.df$b4_1workshop == 0] / after_yrs
+n_per_year[tech.df$b4_1workshop == 1] = tech.df$n[tech.df$b4_1workshop == 1] / before_yrs
+tech.df$n_per_year = n_per_year
+
+tech.df$b4_1workshop = as.factor(tech.df$b4_1workshop)
+p2 = tech.df %>% ggplot(aes(tech, n_per_year, fill = b4_1workshop)) + 
+      geom_bar(stat="identity", position=position_dodge()) +
+      coord_flip() +
+      scale_fill_discrete(name = "IVUmed",
+                          breaks=c("0", "1"),
+                          labels=c("After", "Before")) + 
+      ylab("Number of Surgeries Per Year") + xlab("Urethroplasty Techniques") + 
+      theme_bw()
+p2
+ggsave(filename = "figure/before_after_techs.png", height = 5, width = 8)
+```
+
+### Factors associateds with outcome
+We treat multiple surgeries (for one patient) as independent.
+```{r}
+### recode interval, 0: no prior treatment; 1: <= 6 months; 2: > 6 months
+interval_trt = dat1$`Interval between treatments`
+for(i in 1: nrow(dat1)){
+      inter_i = dat1$`Interval between treatments`[i]
+      if(inter_i == "."){
+            interval_trt[i] = 0
+      }else if(as.numeric(inter_i) <=6){
+            interval_trt[i] = 1
+      }else if(as.numeric(inter_i) > 6 & as.numeric(inter_i) < 999 ){
+            interval_trt[i] = 2
+      }
+}
+tech1 = as.character(dat1$tech)
+tech1[!dat1$tech %in% c("EPA", "flap/graft")] = "other"
+dat1$tech1 = as.factor(tech1)
+
+
+dat1$interval_trt = as.factor(interval_trt)
+
+dat1_wt_knownOut_ = filter(dat1, `Post-op outcome` != 2)
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, `Prior Tx`) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(`Prior Tx`, n_prop) %>% pander
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, Prior_dil) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(Prior_dil, n_prop) %>%
+      pander
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, prior_DVIU) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(prior_DVIU, n_prop) %>%
+      pander
+
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, interval_trt) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(interval_trt, n_prop) %>% pander
+    
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, `S/L_1`) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(`S/L_1`, n_prop) %>% pander
+     
+
+dat1_wt_knownOut_ %>% group_by(`Post-op outcome`, tech1) %>%
+      summarise(n=n()) %>% 
+      mutate(prop = n /sum(n)) %>%
+      mutate(n_prop = paste(n," (",round(prop * 100, 2), "%)", sep = "")) %>%
+      select(`tech1`, n_prop) %>% pander
+      
+```
+
+
+### Intervention
+```{r}
+intervention.df = dat1 %>% group_by(b4_1workshop, `Subs-intervention`) %>%
+      count() %>% as.data.frame()
+n_per_year = rep(0, nrow(intervention.df))
+n_per_year[intervention.df$b4_1workshop == 0] = intervention.df$n[intervention.df$b4_1workshop == 0] / after_yrs
+n_per_year[intervention.df$b4_1workshop == 1] = intervention.df$n[intervention.df$b4_1workshop == 1] / before_yrs
+intervention.df$n_per_year = n_per_year
+
+
+intervention.df$b4_1workshop = as.factor(intervention.df$b4_1workshop)
+intervention.df$`Subs-intervention` = as.factor(intervention.df$`Subs-intervention`)
+intervention.df %>% ggplot(aes(x = `Subs-intervention`, y = n_per_year, fill = b4_1workshop))+ 
+      geom_bar(stat="identity", position=position_dodge()) +
+      scale_fill_discrete(name = "IVUmed",
+                          breaks=c("0", "1"),
+                          labels=c("After", "Before")) + 
+      scale_x_discrete(labels = c("unknown","none", "single dilation", "single DVIU", "maintain SPT", "multiple transurethral", "repeat urethroplasty", "urethral fistula repair")) + 
+      ylab("Number of Surgeries (N=145)") + xlab("Intervention")+
+      theme_bw()+
+      theme(axis.text.x=element_text(color = "black", size=11, angle=30, vjust=.8, hjust=0.8))
+      
+ggsave(filename = "figure/before_after_intervention.png", height = 5, width = 8)
+```
+```{r, eval=F, echo=F}
+print(xtable(outcome_factor.df, caption = "Factors associated with urethroplasty outcome (N=128)"), include.rownames = F)
+```
+
+# Questions
+
+## P-value
+### 1. Is there a significant difference in the number of EPA urethroplasties (N=90) performed before vs after IVUmed became involved on 8/12/13?
+
+There are 50 surgeries operated after 8/12/13, and 40 before 8/12/13. Numbers are compared in year-level
+```{r, warning=FALSE}
+tmp1 = filter(dat1, Surg_tech_1 == 1 & b4_1workshop == 0)
+tmp2 = filter(dat1, Surg_tech_1 == 1 & b4_1workshop == 1)
+
+tmp1_Nepa = tmp1 %>% group_by(YEAR) %>% count()
+tmp2_Nepa = tmp2 %>% group_by(YEAR) %>% count()
+
+tmp1_Nepa
+tmp2_Nepa
+```
+
+```{r}
+t.test(as.matrix(tmp1_Nepa[,2]), as.matrix(tmp2_Nepa[,2]))
+```
+The yearly number of EPA urethroplasties performed after IVUmed is significantly larger than before IVUmed (mean 10.00/year vs. 5.71/year, P-value = 0.035)
+
+### 2. Is there a significant difference in the number of flap/graft urethroplasties performed before vs after IVUmed became involved in 8/12/13?
+```{r}
+list_value = c(2, 3, 4, 10, 11, 14, 15)
+tmp1 = filter(dat1, Surg_tech_1 %in% list_value & b4_1workshop == 0)
+tmp2 = filter(dat1, Surg_tech_1 %in% list_value & b4_1workshop == 1)
+
+tmp1_Nfg = tmp1 %>% group_by(YEAR) %>% count()
+tmp2_Nfg = tmp2 %>% group_by(YEAR) %>% count()
+
+t.test(as.matrix(tmp1_Nfg[,2]), as.matrix(tmp2_Nfg[,2]))
+```
+###3. Was there a significant difference in the success or failure rate of all urethroplasties (N=145) before vs after IVUmed became involved on 8/12/13?
+
+```{r}
+# remove the surgeries' outcome is TBD
+tbd_outcome = filter(dat1, `Post-op outcome` == 2)
+
+# the number of patients who have unknown result surgery
+print(paste("the number of patients whose surgeries result is unknown:", length(unique(tbd_outcome$Patient_id))))
+# the number of unknow surgeries
+print(paste("the number of surgeries with unknown results:", length(unique(tbd_outcome$Study_id))))
+
+
+
+
+```
+
+```{r}
+table(dat1_wt_knownOut_$`Post-op outcome`, dat1_wt_knownOut_$b4_1workshop)
+```
+There are 128 sugeries left. Above is the 2 * 2 table. Rows represent the number of failure/sucsess. Columns represent after/before 8/12/13. 
+First we run a t-test. The null hypothesis of the t-test is the proportion of success rate  before 8/12/13 is the same as it after 8/12/13. We can also do a chi-square test, and the null hypthosis is that the success rate is independent with IVUmed involved or not.
+Both testings have shown a significant results.
+```{r}
+dat1_wt_knownOut_af = filter(dat1_wt_knownOut_, dat1_wt_knownOut_$b4_1workshop == 0)
+dat1_wt_knownOut_bf = filter(dat1_wt_knownOut_, dat1_wt_knownOut_$b4_1workshop == 1)
+# proprotion of success
+t.test(dat1_wt_knownOut_af$`Post-op outcome`, dat1_wt_knownOut_bf$`Post-op outcome`)
+# chi-square test interpretation
+chisq.test(table(dat1_wt_knownOut_$`Post-op outcome`, dat1_wt_knownOut_$b4_1workshop))
+```
+### 4. Was there a significant difference in the success or failure rate of EPA urethroplasties (N=90) before vs after IVUmed became involved in 8/12/13?
+```{r}
+tmp = filter(dat1_wt_knownOut_, Surg_tech_1 == 1)
+print(table(tmp$`Post-op outcome`, tmp$b4_1workshop))
+chisq.test(table(tmp$`Post-op outcome`, tmp$b4_1workshop))
+
+tmp1 = filter(dat1_wt_knownOut_bf, Surg_tech_1 == 1)
+tmp2 = filter(dat1_wt_knownOut_af, Surg_tech_1 == 1)
+t.test(tmp1$`Post-op outcome`, tmp2$`Post-op outcome`)
+```
+### 5.Did the number of sugeries requiring subsequent post-operative intervention change after IVUmed became involved in 8/12/13?
+
+We treat non-zero variables as needing post-operative intervention. If we compare yearly average number of surgeries requiring post-operative intervention before vs. after, t-test will be used. If we compare the proportion of surgeries requiring post-operative intervention before vs. after, we will have a new binary variable to indicate whether there is post intervention or not.
+
+It is better to see distribution of sugeries on post-operative intervention after/before 8/12/13 first.
+```{r}
+print(table(dat1$`Subs-intervention`, dat1$b4_1workshop))
+```
+There are 21 surgeries with missing. We remove such surgeries.
+First to test the average number of post-intervention surgeries
+```{r}
+dat1_no_miss_intervt = filter(dat1, `Subs-intervention` != '.')
+
+tmp1 = filter(dat1_no_miss_intervt, `Subs-intervention` != "0" & b4_1workshop == 0)
+tmp2 = filter(dat1_no_miss_intervt, `Subs-intervention` != "0" & b4_1workshop == 1)
+
+tmp1_Nitvn = tmp1 %>% group_by(YEAR) %>% count()
+tmp2_Nitvn = tmp2 %>% group_by(YEAR) %>% count()
+
+t.test(as.matrix(tmp1_Nitvn)[,2], as.matrix(tmp2_Nitvn)[,2])
+```
+Next to see the proportion of surgeries requiring subsequent post-operative intervention change after IVUmed became involved in 8/12/13.
+```{r}
+# add a binary variable "No_intervention" to indicate whether there is intervention (1) or not (0)
+dat1_no_miss_intervt$intervention = ifelse(dat1_no_miss_intervt$`Subs-intervention` != "0", 1, 0)
+dat1_no_miss_intervt$no_intervention = 1 - dat1_no_miss_intervt$intervention
+
+dat1_no_miss_intervt_af = filter(dat1_no_miss_intervt, b4_1workshop == 0)
+dat1_no_miss_intervt_bf = filter(dat1_no_miss_intervt, b4_1workshop == 1)
+
+# compare no intervetion after/before 
+print(t.test(dat1_no_miss_intervt_af$intervention, dat1_no_miss_intervt_bf$intervention))
+```
+
+### 6. Did the number of surgeries which were 'subsequent-intervention-free' change after IVUmed became involved in 8/12/13?
+
+```{r}
+# yearly operations number
+tot_tmp1 = dat1_no_miss_intervt_af %>% group_by(YEAR) %>% count()
+tot_tmp2 = dat1_no_miss_intervt_bf %>% group_by(YEAR) %>% count()
+
+# no intervention
+tmp1 = filter(dat1_no_miss_intervt_af, `Subs-intervention` == "0")
+tmp2 = filter(dat1_no_miss_intervt_bf, `Subs-intervention` == "0")
+
+tmp1_Nitvn = tmp1 %>% group_by(YEAR) %>% count()
+tmp2_Nitvn = tmp2 %>% group_by(YEAR) %>% count()
+
+# some year the intervention number is zero
+tmp1_Nitvn_vec = rep(0, nrow(tot_tmp1))
+tmp1_Nitvn_vec[as.matrix(tot_tmp1[,1]) %in% as.matrix(tmp1_Nitvn[,1])] = as.matrix(tmp1_Nitvn[,2])
+
+tmp2_Nitvn_vec = rep(0, nrow(tot_tmp2))
+tmp2_Nitvn_vec[as.matrix(tot_tmp2[,1]) %in% as.matrix(tmp2_Nitvn[,1])] = as.matrix(tmp2_Nitvn[,2])
+
+t.test(tmp1_Nitvn_vec, tmp2_Nitvn_vec)
+
+# test the proportion
+# compare no intervetion after/before 
+print(t.test(dat1_no_miss_intervt_af$no_intervention, dat1_no_miss_intervt_bf$no_intervention))
+```
+
+### 7. Are surgery techniques independent with IVUmend involved?
+We run a chi-square test between surgery techinique and whether them performed with members of IVUmed team.
+First to show the distributions of sugery techinques. 
+```{r}
+table(dat1$Surg_tech_1, dat1$IVUmed)
+```
+There is one surgery with unknown sugery techinque, and we remove it.
+```{r}
+dat1_wt_knownSurg = filter(dat1, Surg_tech_1 != ".")
+chisq.test(table(dat1_wt_knownSurg$Surg_tech_1, dat1_wt_knownSurg$IVUmed))
+```
+We fail to accept the null hypothesis that surgery techniques are independent with whether IVUmed team involved. 
+
+### 8. The question "What are the odds of wound breakdown and/or surgical site infection after a flap/graft urethroplasty" is rephrased as "whether the wound breakdown and/or surgical site infection is independent with flap/graft urethroplasty"
+First, we show a 2*2 table with columns as whether flap/graft urethroplasty and rows as whether wound breakdown and/or surgical site infection.
+Note that ID "29/02/16-031" has missing for Wound breakdown/fistula. 
+```{r}
+# the dataset we use here includes the patients who may have multiple surgeries
+# add a binary variable Is_wb_ssi, 1: wound breakdown and/or surgical site infection; 0: no
+#
+dat1$Is_wb_ssi = ifelse(dat1$SSI==1 | dat1$`Wound breakdown/fistula`==1, 1, 0)
+
+# get the data with flap/graft procedures
+list_value = c(2, 3, 4, 10, 11, 14, 15)
+# add a new variable indicating whehther it is  flap/graft urethroplasty (1) or other surgeries (0)
+dat1$Is_flapGraft = ifelse(dat1$Surg_tech_1 %in% list_value, 1, 0)
+table(dat1$Is_wb_ssi, dat1$Is_flapGraft)
+
+# test
+chisq.test(table(dat1$Is_wb_ssi, dat1$Is_flapGraft))
+```
+If we want to compare the odds of wound breakdown and/or surgical site infection after a flap/graft urethroplasty vs. after other urethreplasty technieques, we can have a logistic regression
+```{r}
+# show the table, rows: wound breakdown and/or surgical site infection; cols: flap/graft urethroplasty
+logic_reg = glm(Is_wb_ssi ~ Is_flapGraft, family = binomial(link='logit'), data = dat1 )
+summary(logic_reg)
+```
+The coefficent of the logistic regression is 2.4323 (p-value: 4.36e-06). We further have that if the patient had undergone a flap/graft procedure, in which case their odds of wound breakdown or SSI were 10.39 times (=exp(2.4323)-1) larger than other urethroplasty techniques.
+
+## Multivariate Analysis
+Logistic regression with post-operation failure as outcome. Predict of interests are:
+1. before/after 8/12/13
+2. 
+3. 
+
+Before we start to run the multivariate analysis, check the missing of surgeries.
+```{r}
+# missing
+## outcome
+outcome_miss = filter(dat1, `Post-op outcome` == 2)$Study_id
+print(outcome_miss)
+## ivumed no missing
+## prior procedures, Prior Tx
+prior_tx_miss = filter(dat1, `Prior Tx` == '.')$Study_id
+print(prior_tx_miss)
+## prior urethral dilation
+prior_dil_miss = filter(dat1, Prior_dil == '.')$Study_id
+print(prior_dil_miss)
+## prior DVIU
+prior_DVIU_miss = filter(dat1, prior_DVIU == '.')$Study_id
+print(prior_DVIU_miss)
+## Time interval between procedures 
+interval_miss = filter(dat1, `Interval between treatments`=="999")$Study_id
+print(interval_miss)
+
+## Location of stricture 
+loc_miss = filter(dat1, location_1 == ".")$Study_id
+print(loc_miss)
+### recode, 0: proximal; 1: bulbar; 2: other
+loc_str = as.character(dat1$location_1)
+loc_str[loc_str %in% c("1", "2", "3")] = 0
+loc_str[loc_str %in% "4"] = 1
+loc_str[loc_str %in% c("5", "6", "7", "8", "9")] = 2
+dat1$loc_str = loc_str
+## Length of stricture, SL
+leng_miss = filter(dat1, `S/L_1`=="999")$Study_id
+print(leng_miss)
+
+## Urethroplasty technique, no missing
+## recode, 1: EPA; 2: flap or graft; 3: other
+tech = as.character(dat1$Surg_tech_1)
+tech[tech %in% c("2", "3", "4", "10", "11", "14", "15")] = 2
+tech[tech %in% c("0", as.character(5:9), "12","13")] = 3
+dat1$tech = as.factor(tech)
+```
+List the missing of variables we might need in the multivariate regression.
+```{r}
+miss_tab = c(length(outcome_miss), 0, length(prior_tx_miss), length(prior_dil_miss), length(prior_DVIU_miss), length(interval_miss), length(loc_miss), length(leng_miss), 0)
+names(miss_tab) = c("failure", "IVU_med_team", "prior_tx", "prior_dil", "prior_dviu", "interval", "loc", "length", "tech")
+print(miss_tab)
+```
+The overall patients who has missing
+```{r}
+miss_surg = unique(c(outcome_miss, prior_tx_miss, prior_dil_miss, prior_DVIU_miss, interval_miss, loc_miss, leng_miss))
+length(miss_surg)
+```
+There are 70 surgeries (48.3%) have missing. Since there are 47 missing in length of stricture. Due to the larger number of missing, we will not add the variable into out final regresson. 
+```{r}
+miss_surg = unique(c(outcome_miss, prior_tx_miss, prior_dil_miss, prior_DVIU_miss, interval_miss, loc_miss))
+print(miss_surg)
+length(miss_surg)
+```
+Finally, there are 35 (24.`%) patients who have miss. We rule out these 35 surgeries, and do the multivariate regression on 110 surgeries left.
+```{r}
+# remove patients who have missing among the variables
+dat_wo_miss = dat1[!dat1$Study_id %in% miss_surg,]
+```
+We run a logsitic regression. First to see raw regression, and then adding variables to adjust the regressoin.
+```{r}
+dat_wo_miss$Is_after = 1 - dat_wo_miss$b4_1workshop
+dat_wo_miss$Is_failure = 1 - dat_wo_miss$`Post-op outcome`
+# raw 
+logit_raw = glm(Is_failure ~ Is_after, family = binomial('logit'), data = dat_wo_miss)
+
+round(summary(logit_raw)$coef[2,c(1,2,4)],3)  %>% pander()
+
+# raw + IVUmed team
+logit_1 = glm(Is_failure ~ Is_after + IVUmed, family = binomial('logit'), data = dat_wo_miss)
+summary(logit_1)
+
+# raw + tech
+logit_2 = glm(Is_failure ~ Is_after + tech1, family = binomial('logit'), data = dat_wo_miss)
+summary(logit_2)
+
+# raw + prior
+logit_3 =  glm(Is_failure ~ Is_after + as.factor(`Prior Tx`) + as.factor(Prior_dil) + as.factor(prior_DVIU), family = binomial('logit'), data = dat_wo_miss)
+summary(logit_3)
+# full
+logit_full = glm(Is_failure ~ Is_after + IVUmed + as.factor(`Prior Tx`) + as.factor(Prior_dil) + as.factor(prior_DVIU) + interval_trt + loc_str + tech1, family = binomial('logit'), data = dat_wo_miss)
+summary(logit_full)
+
+
+tab = rbind(raw = summary(logit_raw)$coef[2,c(1,2,4)], 
+            'model 1' = summary(logit_1)$coef[2,c(1,2,4)], 
+            'model 2' = summary(logit_2)$coef[2,c(1,2,4)], 
+            'model 3' = summary(logit_3)$coef[2,c(1,2,4)],
+            full = summary(logit_full)$coef[2,c(1,2,4)]) 
+tab %>%
+      pander
+```
+```{r, eval=F, echo=F}
+purl("UrethralStudy.Rmd", output = "UrethralStudy.R", documentation = 2)
+```
