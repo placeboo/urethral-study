@@ -637,7 +637,7 @@ year_prop_out.df = dat1 %>% group_by(year = YEAR, `Post-op outcome`) %>%
 
 year_prop_out.df$`Post-op outcome` =  as.factor(year_prop_out.df$`Post-op outcome`)
 
-year_prop_out.df %>% 
+p1 = year_prop_out.df %>% 
       ggplot(aes(year, prop, group = `Post-op outcome`, color = `Post-op outcome`)) +
       geom_point(size=5) +
       geom_line(size=1.5)  +
@@ -647,9 +647,10 @@ year_prop_out.df %>%
                             labels=c("Failure", "Success", "TBD")) + 
       ylab("Proportion") + xlab("Year") + 
       theme_bw()
+p1
 ```
 
-![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-15-1.png)
+![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-47-1.png)
 
 ``` r
 ggsave(filename = "figure/post_outcome.png", height = 5, width = 8)
@@ -701,7 +702,7 @@ n_per_year[tech.df$b4_1workshop == 1] = tech.df$n[tech.df$b4_1workshop == 1] / b
 tech.df$n_per_year = n_per_year
 
 tech.df$b4_1workshop = as.factor(tech.df$b4_1workshop)
-tech.df %>% ggplot(aes(tech, n_per_year, fill = b4_1workshop)) + 
+p2 = tech.df %>% ggplot(aes(tech, n_per_year, fill = b4_1workshop)) + 
       geom_bar(stat="identity", position=position_dodge()) +
       coord_flip() +
       scale_fill_discrete(name = "IVUmed",
@@ -709,9 +710,10 @@ tech.df %>% ggplot(aes(tech, n_per_year, fill = b4_1workshop)) +
                           labels=c("After", "Before")) + 
       ylab("Number of Surgeries Per Year") + xlab("Urethroplasty Techniques") + 
       theme_bw()
+p2
 ```
 
-![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-16-1.png)
+![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-48-1.png)
 
 ``` r
 ggsave(filename = "figure/before_after_techs.png", height = 5, width = 8)
@@ -1130,7 +1132,7 @@ intervention.df %>% ggplot(aes(x = `Subs-intervention`, y = n_per_year, fill = b
       theme(axis.text.x=element_text(color = "black", size=11, angle=30, vjust=.8, hjust=0.8))
 ```
 
-![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-18-1.png)
+![](UrethralStudy_official_files/figure-markdown_github/unnamed-chunk-50-1.png)
 
 ``` r
 ggsave(filename = "figure/before_after_intervention.png", height = 5, width = 8)
